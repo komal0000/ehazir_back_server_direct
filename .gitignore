@@ -1,0 +1,22 @@
+# Ignore node_modules
+node_modules/
+
+# Ignore log files
+*.log
+
+# Ignore environment files
+.env
+
+# Ignore build directories
+dist/
+
+# ignore the sqllite files
+*.sqlite
+*.db
+*.db-shm
+*.db-wal
+
+lastdata.txt
+rfid.txt
+tokens.csv
+# /android
