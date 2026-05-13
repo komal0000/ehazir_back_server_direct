@@ -161,7 +161,7 @@ fun RegisterScreen(
                             value = state.serverHost,
                             onValueChange = { viewModel.updateServerHost(it) },
                             label = { Text("SERVER_HOST") },
-                            placeholder = { Text("192.168.1.10") },
+                            placeholder = { Text("192.168.") },
                             modifier = Modifier.weight(3f).padding(bottom = 12.dp),
                             singleLine = true
                         )
@@ -217,8 +217,8 @@ fun RegisterScreen(
                         OutlinedTextField(
                             value = state.mainDomain,
                             onValueChange = { viewModel.updateMainDomain(it) },
-                            label = { Text("MAIN_DOMAIN") },
-                            placeholder = { Text("demo.ehazircloud.com") },
+                            label = { Text("Tenant") },
+                            placeholder = { Text("xyz") },
                             modifier = Modifier.weight(2.5f).padding(bottom = 12.dp),
                             singleLine = true
                         )

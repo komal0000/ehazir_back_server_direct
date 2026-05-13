@@ -8,12 +8,15 @@ import androidx.lifecycle.viewModelScope
 import com.ehazir.companion.data.preferences.AppPreferences
 import com.ehazir.companion.data.preferences.ConfigManager
 import com.ehazir.companion.data.preferences.DeviceConfig
+import com.ehazir.companion.data.preferences.DomainUtils
 import com.ehazir.companion.service.RfidSocketService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -26,6 +29,7 @@ data class SettingsState(
     val mainDomain: String = "",
     val mainProtocol: String = "https",
     val deviceUpdateTime: String = "30",
+    val isLatestRfidHttpEnabled: Boolean = false,
     val message: String? = null
 )
 
@@ -41,6 +45,7 @@ class SettingsViewModel @Inject constructor(
 
     init {
         loadConfig()
+        observeLatestRfidHttpEnabled()
     }
 
     private fun loadConfig() {
@@ -51,9 +56,9 @@ class SettingsViewModel @Inject constructor(
                 it.copy(
                     deviceId         = config.deviceId,
                     localToken       = config.localToken,
-                    serverHost       = config.serverHost,
+                    serverHost       = config.serverHost.ifBlank { "192.168." },
                     serverPort       = config.serverPort,
-                    mainDomain       = config.mainDomain,
+                    mainDomain       = DomainUtils.toTenant(config.mainDomain),
                     mainProtocol     = config.mainProtocol,
                     deviceUpdateTime = config.deviceUpdateTime
                 )
@@ -65,9 +70,9 @@ class SettingsViewModel @Inject constructor(
                     it.copy(
                         deviceId         = saved.deviceId,
                         localToken       = saved.localToken,
-                        serverHost       = saved.serverHost,
+                        serverHost       = saved.serverHost.ifBlank { "192.168." },
                         serverPort       = saved.serverPort,
-                        mainDomain       = saved.mainDomain,
+                        mainDomain       = DomainUtils.toTenant(saved.mainDomain),
                         mainProtocol     = saved.mainProtocol,
                         deviceUpdateTime = saved.deviceUpdateTime
                     )
@@ -81,15 +86,29 @@ class SettingsViewModel @Inject constructor(
 
     fun clearMessage() = _state.update { it.copy(message = null) }
 
-    fun saveSettings() {
+    private fun observeLatestRfidHttpEnabled() {
         viewModelScope.launch {
+            prefs.isLatestRfidHttpEnabled.collect { enabled ->
+                _state.update { it.copy(isLatestRfidHttpEnabled = enabled) }
+            }
+        }
+    }
+
+    fun saveSettings() {
+        viewModelScope.launch(Dispatchers.IO) {
             val s = _state.value
+            val normalizedDomain = DomainUtils.normalizeTenantDomain(s.mainDomain)
+            if (!DomainUtils.validateDomainExists(normalizedDomain)) {
+                _state.update { it.copy(message = "Domain does not exist: $normalizedDomain") }
+                return@launch
+            }
+
             val config = DeviceConfig(
                 localToken       = s.localToken,
                 deviceId         = s.deviceId,
-                serverHost       = s.serverHost,
+                serverHost       = s.serverHost.trim().ifBlank { "192.168." },
                 serverPort       = s.serverPort,
-                mainDomain       = s.mainDomain,
+                mainDomain       = normalizedDomain,
                 mainProtocol     = s.mainProtocol,
                 deviceUpdateTime = s.deviceUpdateTime
             )
@@ -125,5 +144,43 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { prefs.setServiceEnabled(false) }
         val intent = Intent(appContext, RfidSocketService::class.java)
         appContext.stopService(intent)
+    }
+
+    fun startLatestRfidHttpServer() {
+        viewModelScope.launch {
+            prefs.setLatestRfidHttpEnabled(true)
+            _state.update {
+                it.copy(
+                    isLatestRfidHttpEnabled = true,
+                    message = "Latest RFID HTTP server enabled on port ${RfidSocketService.LATEST_RFID_HTTP_PORT}"
+                )
+            }
+            val intent = Intent(appContext, RfidSocketService::class.java).apply {
+                action = RfidSocketService.ACTION_START_LATEST_RFID_HTTP
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appContext.startForegroundService(intent)
+            } else {
+                appContext.startService(intent)
+            }
+        }
+    }
+
+    fun stopLatestRfidHttpServer() {
+        viewModelScope.launch {
+            prefs.setLatestRfidHttpEnabled(false)
+            _state.update {
+                it.copy(
+                    isLatestRfidHttpEnabled = false,
+                    message = "Latest RFID HTTP server disabled"
+                )
+            }
+            if (RfidSocketService.isRunning.value) {
+                val intent = Intent(appContext, RfidSocketService::class.java).apply {
+                    action = RfidSocketService.ACTION_STOP_LATEST_RFID_HTTP
+                }
+                appContext.startService(intent)
+            }
+        }
     }
 }

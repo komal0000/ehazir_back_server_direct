@@ -24,6 +24,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import java.io.IOException
+import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -45,6 +49,11 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         private const val CHANNEL_ID = "rfid_service_channel"
         private const val NOTIFICATION_ID = 1001
         private const val FLUSH_INTERVAL_MS = 1000L
+        const val LATEST_RFID_HTTP_PORT = 9000
+        const val ACTION_START_LATEST_RFID_HTTP =
+            "com.ehazir.companion.action.START_LATEST_RFID_HTTP"
+        const val ACTION_STOP_LATEST_RFID_HTTP =
+            "com.ehazir.companion.action.STOP_LATEST_RFID_HTTP"
 
         // Observable state for the UI — set from the service instance
         private val _isRunning = MutableStateFlow(false)
@@ -55,6 +64,12 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
 
         private val _lastScannedRfid = MutableStateFlow<String?>(null)
         val lastScannedRfid: StateFlow<String?> = _lastScannedRfid.asStateFlow()
+
+        private val _isLatestRfidHttpRunning = MutableStateFlow(false)
+        val isLatestRfidHttpRunning: StateFlow<Boolean> = _isLatestRfidHttpRunning.asStateFlow()
+
+        private val _latestRfidHttpError = MutableStateFlow<String?>(null)
+        val latestRfidHttpError: StateFlow<String?> = _latestRfidHttpError.asStateFlow()
     }
 
     @Inject lateinit var dao: AttendanceDao
@@ -64,6 +79,8 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val socketClients = mutableListOf<RfidSocketClient>()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var latestRfidHttpJob: Job? = null
+    private var latestRfidHttpServerSocket: ServerSocket? = null
 
     // In-memory attendance cache keyed by RFID (same pattern as main.js)
     private data class CachedRecord(
@@ -101,13 +118,21 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
                 
                 val deviceUpdateTimeStr = prefs.deviceUpdateTime.first()
                 deviceUpdateTime = deviceUpdateTimeStr.toIntOrNull() ?: 30
+                val latestRfidHttpEnabled = prefs.isLatestRfidHttpEnabled.first()
+                if (latestRfidHttpEnabled) {
+                    startLatestRfidHttpServer()
+                }
                 
                 val hosts = serverHost.split(",").map { it.trim() }.filter { it.isNotBlank() }
 
                 if (hosts.isEmpty()) {
                     Log.e(TAG, "No server hosts configured")
-                    updateNotification("Error: No server hosts configured")
-                    stopSelf()
+                    if (latestRfidHttpEnabled) {
+                        updateNotification("Latest RFID HTTP active; no reader configured")
+                    } else {
+                        updateNotification("Error: No server hosts configured")
+                        stopSelf()
+                    }
                     return@launch
                 }
 
@@ -135,6 +160,91 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
                 updateNotification("Error: ${e.message}")
                 stopSelf()
             }
+        }
+    }
+
+    // --- Latest RFID HTTP server ---
+
+    @Synchronized
+    private fun startLatestRfidHttpServer() {
+        if (latestRfidHttpJob?.isActive == true) {
+            _latestRfidHttpError.value = null
+            return
+        }
+
+        latestRfidHttpJob = serviceScope.launch {
+            try {
+                val serverSocket = ServerSocket(LATEST_RFID_HTTP_PORT)
+                latestRfidHttpServerSocket = serverSocket
+                _latestRfidHttpError.value = null
+                _isLatestRfidHttpRunning.value = true
+                Log.d(TAG, "Latest RFID HTTP server listening on port $LATEST_RFID_HTTP_PORT")
+
+                while (isActive && !serverSocket.isClosed) {
+                    val client = try {
+                        serverSocket.accept()
+                    } catch (e: SocketException) {
+                        if (isActive) throw e else break
+                    }
+
+                    launch {
+                        handleLatestRfidHttpClient(client)
+                    }
+                }
+            } catch (e: IOException) {
+                if (isActive) {
+                    val message = e.message ?: "Unable to start HTTP server"
+                    Log.e(TAG, "Latest RFID HTTP server error: $message", e)
+                    _latestRfidHttpError.value = message
+                }
+            } finally {
+                runCatching { latestRfidHttpServerSocket?.close() }
+                latestRfidHttpServerSocket = null
+                _isLatestRfidHttpRunning.value = false
+            }
+        }
+    }
+
+    @Synchronized
+    private fun stopLatestRfidHttpServer() {
+        latestRfidHttpJob?.cancel()
+        latestRfidHttpJob = null
+        runCatching { latestRfidHttpServerSocket?.close() }
+        latestRfidHttpServerSocket = null
+        _isLatestRfidHttpRunning.value = false
+        _latestRfidHttpError.value = null
+        Log.d(TAG, "Latest RFID HTTP server stopped")
+    }
+
+    private fun handleLatestRfidHttpClient(client: Socket) {
+        client.use { socket ->
+            socket.soTimeout = 2000
+
+            runCatching {
+                val reader = socket.getInputStream().bufferedReader()
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isEmpty()) break
+                }
+            }
+
+            val output = socket.getOutputStream()
+            val latestRfid = _lastScannedRfid.value
+            if (latestRfid.isNullOrBlank()) {
+                val response = "HTTP/1.1 204 No Content\r\n" +
+                    "Connection: close\r\n" +
+                    "Content-Length: 0\r\n\r\n"
+                output.write(response.toByteArray(Charsets.UTF_8))
+            } else {
+                val body = latestRfid.toByteArray(Charsets.UTF_8)
+                val headers = "HTTP/1.1 200 OK\r\n" +
+                    "Content-Type: text/plain; charset=utf-8\r\n" +
+                    "Content-Length: ${body.size}\r\n" +
+                    "Connection: close\r\n\r\n"
+                output.write(headers.toByteArray(Charsets.UTF_8))
+                output.write(body)
+            }
+            output.flush()
         }
     }
 
@@ -296,6 +406,9 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         // Stop periodic flush
         mainHandler.removeCallbacksAndMessages(null)
 
+        // Stop Latest RFID HTTP server
+        stopLatestRfidHttpServer()
+
         // Final flush
         runBlocking {
             flushCache()
@@ -306,12 +419,27 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         _isRunning.value = false
         _connectionStatus.value = emptyMap()
         _lastScannedRfid.value = null
+        _latestRfidHttpError.value = null
 
         super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        when (intent?.action) {
+            ACTION_START_LATEST_RFID_HTTP -> {
+                serviceScope.launch {
+                    prefs.setLatestRfidHttpEnabled(true)
+                    startLatestRfidHttpServer()
+                }
+            }
+            ACTION_STOP_LATEST_RFID_HTTP -> {
+                serviceScope.launch {
+                    prefs.setLatestRfidHttpEnabled(false)
+                    stopLatestRfidHttpServer()
+                }
+            }
+        }
         return START_STICKY
     }
 

@@ -29,6 +29,8 @@ fun SettingsScreen(
     // Socket service state
     val socketRunning    by RfidSocketService.isRunning.collectAsState()
     val connectionStatus by RfidSocketService.connectionStatus.collectAsState()
+    val latestRfidHttpRunning by RfidSocketService.isLatestRfidHttpRunning.collectAsState()
+    val latestRfidHttpError   by RfidSocketService.latestRfidHttpError.collectAsState()
 
     Scaffold(
         topBar = {
@@ -97,8 +99,8 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = state.mainDomain,
                 onValueChange = { viewModel.update { s -> s.copy(mainDomain = it) } },
-                label = { Text("MAIN_DOMAIN") },
-                placeholder = { Text("demo.ehazircloud.com") },
+                label = { Text("Tenant") },
+                placeholder = { Text("xyz") },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -110,6 +112,7 @@ fun SettingsScreen(
                     value = state.serverHost,
                     onValueChange = { viewModel.update { s -> s.copy(serverHost = it) } },
                     label = { Text("SERVER_HOST") },
+                    placeholder = { Text("192.168.") },
                     modifier = Modifier.weight(3f)
                 )
                 OutlinedTextField(
@@ -207,6 +210,45 @@ fun SettingsScreen(
 
             // ─────────────────────────────────────────────────────────────────
 
+            HorizontalDivider()
+            Text("Latest RFID HTTP Server", style = MaterialTheme.typography.titleMedium)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = when {
+                            latestRfidHttpRunning -> "Running on port ${RfidSocketService.LATEST_RFID_HTTP_PORT}"
+                            latestRfidHttpError != null -> "Error: $latestRfidHttpError"
+                            state.isLatestRfidHttpEnabled -> "Starting..."
+                            else -> "Stopped"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = when {
+                            latestRfidHttpRunning -> Color(0xFF00D4AA)
+                            latestRfidHttpError != null -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                    Text(
+                        text = "http://<device-ip>:${RfidSocketService.LATEST_RFID_HTTP_PORT}/",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = state.isLatestRfidHttpEnabled,
+                    onCheckedChange = { enabled ->
+                        if (enabled) viewModel.startLatestRfidHttpServer()
+                        else viewModel.stopLatestRfidHttpServer()
+                    }
+                )
+            }
+
             Button(
                 onClick = { viewModel.saveSettings() },
                 modifier = Modifier.fillMaxWidth()
@@ -233,4 +275,3 @@ fun SettingsScreen(
         }
     }
 }
-

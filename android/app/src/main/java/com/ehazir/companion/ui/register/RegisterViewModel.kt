@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.ehazir.companion.data.preferences.AppPreferences
 import com.ehazir.companion.data.preferences.ConfigManager
 import com.ehazir.companion.data.preferences.DeviceConfig
+import com.ehazir.companion.data.preferences.DomainUtils
 import com.ehazir.companion.data.remote.EhazirApiService
 import com.ehazir.companion.data.remote.RegisterRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,7 +30,7 @@ data class RegisterState(
     // Step 2 - Config fields
     val localToken: String = "",       // user pastes received Telegram token here
     val deviceId: String = "",         // auto-generated, shown read-only
-    val serverHost: String = "",       // IP of the RFID reader device
+    val serverHost: String = "192.168.", // IP of the RFID reader device
     val serverPort: String = "2022",
     val mainDomain: String = "",       // e.g. demo.ehazircloud.com
     val mainProtocol: String = "https",
@@ -58,9 +59,9 @@ class RegisterViewModel @Inject constructor(
         _state.update {
             it.copy(
                 deviceId         = autoDeviceId,
-                serverHost       = existing?.serverHost ?: "",
+                serverHost       = existing?.serverHost?.ifBlank { "192.168." } ?: "192.168.",
                 serverPort       = existing?.serverPort ?: "2022",
-                mainDomain       = existing?.mainDomain ?: "",
+                mainDomain       = DomainUtils.toTenant(existing?.mainDomain ?: ""),
                 mainProtocol     = existing?.mainProtocol ?: "https",
                 deviceUpdateTime = existing?.deviceUpdateTime ?: "30"
             )
@@ -117,13 +118,24 @@ class RegisterViewModel @Inject constructor(
         }
         _state.update { it.copy(isSubmitting = true, error = null) }
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
+            val normalizedDomain = DomainUtils.normalizeTenantDomain(s.mainDomain)
+            if (!DomainUtils.validateDomainExists(normalizedDomain)) {
+                _state.update {
+                    it.copy(
+                        isSubmitting = false,
+                        error = "Domain does not exist: $normalizedDomain"
+                    )
+                }
+                return@launch
+            }
+
             val config = DeviceConfig(
                 localToken       = s.localToken.trim(),
                 deviceId         = s.deviceId,
-                serverHost       = s.serverHost.trim(),
+                serverHost       = s.serverHost.trim().ifBlank { "192.168." },
                 serverPort       = s.serverPort.trim(),
-                mainDomain       = s.mainDomain.trim(),
+                mainDomain       = normalizedDomain,
                 mainProtocol     = s.mainProtocol.trim(),
                 deviceUpdateTime = s.deviceUpdateTime.trim()
             )

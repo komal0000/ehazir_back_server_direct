@@ -37,8 +37,12 @@ class BootReceiver : BroadcastReceiver() {
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                 try {
                     val isServiceEnabled = prefs.isServiceEnabled.first()
-                    Log.d("BootReceiver", "isServiceEnabled=\$isServiceEnabled")
-                    if (isServiceEnabled) {
+                    val isLatestRfidHttpEnabled = prefs.isLatestRfidHttpEnabled.first()
+                    Log.d(
+                        "BootReceiver",
+                        "isServiceEnabled=$isServiceEnabled, isLatestRfidHttpEnabled=$isLatestRfidHttpEnabled"
+                    )
+                    if (isServiceEnabled || isLatestRfidHttpEnabled) {
                         Log.d("BootReceiver", "Starting RfidSocketService...")
                         val serviceIntent = Intent(context, RfidSocketService::class.java)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

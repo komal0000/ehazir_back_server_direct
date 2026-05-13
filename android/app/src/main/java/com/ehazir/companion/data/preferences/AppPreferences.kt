@@ -18,7 +18,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 data class DeviceConfig(
     val localToken: String = "",
     val deviceId: String = "",
-    val serverHost: String = "",
+    val serverHost: String = "192.168.",
     val serverPort: String = "2022",
     val mainDomain: String = "",
     val mainProtocol: String = "https",
@@ -39,21 +39,30 @@ class AppPreferences @Inject constructor(
         val DEVICE_UPDATE_TIME = stringPreferencesKey("device_update_time")
         val IS_REGISTERED     = stringPreferencesKey("is_registered")
         val IS_SERVICE_ENABLED = stringPreferencesKey("is_service_enabled")
+        val IS_LATEST_RFID_HTTP_ENABLED = stringPreferencesKey("is_latest_rfid_http_enabled")
     }
 
     val localToken: Flow<String>        = context.dataStore.data.map { it[LOCAL_TOKEN]       ?: "" }
     val deviceId: Flow<String>          = context.dataStore.data.map { it[DEVICE_ID]         ?: "" }
-    val serverHost: Flow<String>        = context.dataStore.data.map { it[SERVER_HOST]       ?: "" }
+    val serverHost: Flow<String>        = context.dataStore.data.map { it[SERVER_HOST]       ?: "192.168." }
     val serverPort: Flow<String>        = context.dataStore.data.map { it[SERVER_PORT]       ?: "2022" }
     val mainDomain: Flow<String>        = context.dataStore.data.map { it[MAIN_DOMAIN]       ?: "" }
     val mainProtocol: Flow<String>      = context.dataStore.data.map { it[MAIN_PROTOCOL]     ?: "https" }
     val deviceUpdateTime: Flow<String>  = context.dataStore.data.map { it[DEVICE_UPDATE_TIME]?: "30" }
     val isRegistered: Flow<Boolean>     = context.dataStore.data.map { it[IS_REGISTERED]     == "true" }
     val isServiceEnabled: Flow<Boolean> = context.dataStore.data.map { it[IS_SERVICE_ENABLED] == "true" }
+    val isLatestRfidHttpEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[IS_LATEST_RFID_HTTP_ENABLED] == "true" }
 
     suspend fun setServiceEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[IS_SERVICE_ENABLED] = if (enabled) "true" else "false"
+        }
+    }
+
+    suspend fun setLatestRfidHttpEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[IS_LATEST_RFID_HTTP_ENABLED] = if (enabled) "true" else "false"
         }
     }
 
@@ -82,7 +91,7 @@ class AppPreferences @Inject constructor(
         return DeviceConfig(
             localToken       = prefs[LOCAL_TOKEN]        ?: "",
             deviceId         = prefs[DEVICE_ID]          ?: "",
-            serverHost       = prefs[SERVER_HOST]        ?: "",
+            serverHost       = prefs[SERVER_HOST]        ?: "192.168.",
             serverPort       = prefs[SERVER_PORT]        ?: "2022",
             mainDomain       = prefs[MAIN_DOMAIN]        ?: "",
             mainProtocol     = prefs[MAIN_PROTOCOL]      ?: "https",
@@ -98,4 +107,3 @@ class AppPreferences @Inject constructor(
         }
     }
 }
-
