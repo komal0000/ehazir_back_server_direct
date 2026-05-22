@@ -220,33 +220,54 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         client.use { socket ->
             socket.soTimeout = 2000
 
+            var requestLine: String? = null
             runCatching {
                 val reader = socket.getInputStream().bufferedReader()
                 while (true) {
                     val line = reader.readLine() ?: break
+                    if (requestLine == null) requestLine = line
                     if (line.isEmpty()) break
                 }
             }
 
             val output = socket.getOutputStream()
-            val latestRfid = _lastScannedRfid.value
-            if (latestRfid.isNullOrBlank()) {
+            if (requestLine?.startsWith("OPTIONS ", ignoreCase = true) == true) {
                 val response = "HTTP/1.1 204 No Content\r\n" +
+                    latestRfidCorsHeaders() +
                     "Connection: close\r\n" +
                     "Content-Length: 0\r\n\r\n"
                 output.write(response.toByteArray(Charsets.UTF_8))
-            } else {
-                val body = latestRfid.toByteArray(Charsets.UTF_8)
-                val headers = "HTTP/1.1 200 OK\r\n" +
-                    "Content-Type: text/plain; charset=utf-8\r\n" +
-                    "Content-Length: ${body.size}\r\n" +
-                    "Connection: close\r\n\r\n"
-                output.write(headers.toByteArray(Charsets.UTF_8))
-                output.write(body)
+                output.flush()
+                return
             }
+
+            val latestRfid = _lastScannedRfid.value?.takeIf { it.isNotBlank() }
+            val body = latestRfidJsonBody(latestRfid).toByteArray(Charsets.UTF_8)
+            val headers = "HTTP/1.1 200 OK\r\n" +
+                latestRfidCorsHeaders() +
+                "Content-Type: application/json; charset=utf-8\r\n" +
+                "Content-Length: ${body.size}\r\n" +
+                "Connection: close\r\n\r\n"
+            output.write(headers.toByteArray(Charsets.UTF_8))
+            output.write(body)
             output.flush()
         }
     }
+
+    private fun latestRfidJsonBody(rfid: String?): String {
+        val escapedRfid = rfid?.replace("\\", "\\\\")?.replace("\"", "\\\"")
+        return if (escapedRfid == null) {
+            """{"data":null,"status":true}"""
+        } else {
+            """{"data":"$escapedRfid","status":true}"""
+        }
+    }
+
+    private fun latestRfidCorsHeaders(): String =
+        "Access-Control-Allow-Origin: *\r\n" +
+            "Access-Control-Allow-Methods: GET, OPTIONS\r\n" +
+            "Access-Control-Allow-Headers: *\r\n" +
+            "Access-Control-Max-Age: 86400\r\n"
 
     /**
      * Load today's attendance records into the in-memory cache

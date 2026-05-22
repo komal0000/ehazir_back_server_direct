@@ -35,6 +35,12 @@ data class SyncResponse(
 )
 
 // --- Staff list ---
+data class StaffListRequest(
+    @SerializedName("token") val token: String,
+    @SerializedName("device_id") val deviceId: String,
+    @SerializedName("provide_grade") val provideGrade: Boolean = true
+)
+
 data class StaffListResponse(
     @SerializedName("status") val status: Boolean = false,
     @SerializedName("data") val data: StaffListData? = null,
@@ -68,4 +74,22 @@ data class GradeDto(
 data class GradeSectionDto(
     @SerializedName("id") val id: Int,
     @SerializedName("name") val name: String
+)
+
+// --- Today attendance dashboard ---
+data class TodayAttendanceRequest(
+    @SerializedName("token") val token: String,
+    @SerializedName("device_id") val deviceId: String
+)
+
+data class TodayAttendanceResponse(
+    @SerializedName("status") val status: Boolean = false,
+    @SerializedName("data") val data: TodayAttendanceData? = null,
+    @SerializedName("msg") val msg: List<String> = emptyList()
+)
+
+data class TodayAttendanceData(
+    @SerializedName("student") val student: Map<String, Int> = emptyMap(),
+    @SerializedName("staff") val staff: Map<String, Int> = emptyMap(),
+    @SerializedName("teacher") val teacher: Map<String, Int> = emptyMap()
 )

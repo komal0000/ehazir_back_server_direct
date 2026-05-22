@@ -4,7 +4,6 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
-import retrofit2.http.Query
 
 interface EhazirApiService {
 
@@ -18,10 +17,15 @@ interface EhazirApiService {
         @Body request: SyncRequest
     ): Response<SyncResponse>
 
-    @GET("api/device/staff-list")
+    @POST("api/device/staff-list")
     suspend fun getStaffList(
-        @Query("provide_grade") provideGrade: Boolean = true
+        @Body request: StaffListRequest
     ): Response<StaffListResponse>
+
+    @POST("api/device/today-attendance-data")
+    suspend fun getTodayAttendanceData(
+        @Body request: TodayAttendanceRequest
+    ): Response<TodayAttendanceResponse>
 }
 
 interface ValidationApiService {

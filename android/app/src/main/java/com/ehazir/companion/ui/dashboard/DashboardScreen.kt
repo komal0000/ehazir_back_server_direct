@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material3.Card
@@ -64,8 +65,10 @@ fun DashboardScreen(
     onManageConnection: () -> Unit,
     onOpenAttendance: () -> Unit,
     onOpenAppLauncher: () -> Unit,
+    onOpenManageStudentAttendance: () -> Unit,
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
+    val state by viewModel.state.collectAsState()
     val socketRunning by RfidSocketService.isRunning.collectAsState()
     val connectionStatus by RfidSocketService.connectionStatus.collectAsState()
     val lastScannedRfid by RfidSocketService.lastScannedRfid.collectAsState()
@@ -112,6 +115,14 @@ fun DashboardScreen(
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text("Manage Student Attendance") },
+                                leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+                                onClick = {
+                                    actionsExpanded = false
+                                    onOpenManageStudentAttendance()
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Set as Home") },
                                 leadingIcon = { Icon(Icons.Default.Home, contentDescription = null) },
                                 onClick = {
@@ -150,23 +161,40 @@ fun DashboardScreen(
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
+            val attendanceSummaryError = state.attendanceSummaryError
+            when {
+                state.isAttendanceSummaryLoading -> Text(
+                    "Loading today attendance...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                attendanceSummaryError != null -> Text(
+                    attendanceSummaryError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
 
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val sections = listOf("Students", "Teachers", "Staffs")
+                val sections = listOf(
+                    "Students" to state.studentCounts,
+                    "Teachers" to state.teacherCounts,
+                    "Staffs" to state.staffCounts
+                )
                 val isTablet = maxWidth >= 720.dp
                 if (maxWidth >= 720.dp) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        sections.forEach { title ->
-                            SummarySection(title = title, isTablet = isTablet, modifier = Modifier.weight(1f))
+                        sections.forEach { (title, counts) ->
+                            SummarySection(title = title, counts = counts, isTablet = isTablet, modifier = Modifier.weight(1f))
                         }
                     }
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        sections.forEach { title ->
-                            SummarySection(title = title, isTablet = isTablet, modifier = Modifier.fillMaxWidth())
+                        sections.forEach { (title, counts) ->
+                            SummarySection(title = title, counts = counts, isTablet = isTablet, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }
@@ -287,7 +315,12 @@ private fun RfidPanel(
 }
 
 @Composable
-private fun SummarySection(title: String, isTablet: Boolean, modifier: Modifier = Modifier) {
+private fun SummarySection(
+    title: String,
+    counts: AttendanceSummaryCounts,
+    isTablet: Boolean,
+    modifier: Modifier = Modifier
+) {
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -300,13 +333,13 @@ private fun SummarySection(title: String, isTablet: Boolean, modifier: Modifier 
             )
             Spacer(modifier = Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                StatusCard("Present", "0", Color(0xFF1F7A3D), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
-                StatusCard("Absent", "0", Color(0xFFC62828), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
+                StatusCard("Present", counts.present.toString(), Color(0xFF1F7A3D), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
+                StatusCard("Absent", counts.absent.toString(), Color(0xFFC62828), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
             }
             Spacer(modifier = Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                StatusCard("Half", "0", Color(0xFFB26A00), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
-                StatusCard("Leave", "0", Color(0xFFE56B1F), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
+                StatusCard("Half", counts.half.toString(), Color(0xFFB26A00), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
+                StatusCard("Leave", counts.leave.toString(), Color(0xFFE56B1F), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
             }
         }
     }

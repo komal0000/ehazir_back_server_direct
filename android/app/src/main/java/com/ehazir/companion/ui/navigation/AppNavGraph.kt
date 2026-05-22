@@ -11,6 +11,7 @@ import com.ehazir.companion.data.preferences.AppPreferences
 import com.ehazir.companion.ui.attendance.AttendanceScreen
 import com.ehazir.companion.ui.dashboard.DashboardScreen
 import com.ehazir.companion.ui.launcher.AppLauncherScreen
+import com.ehazir.companion.ui.manageattendance.ManageStudentAttendanceScreen
 import com.ehazir.companion.ui.register.RegisterScreen
 import com.ehazir.companion.ui.settings.SettingsScreen
 
@@ -37,7 +38,8 @@ fun AppNavGraph(
             DashboardScreen(
                 onManageConnection = { navController.navigate("settings") },
                 onOpenAttendance = { navController.navigate("attendance") },
-                onOpenAppLauncher = { navController.navigate("appLauncher") }
+                onOpenAppLauncher = { navController.navigate("appLauncher") },
+                onOpenManageStudentAttendance = { navController.navigate("manageStudentAttendance") }
             )
         }
         composable("attendance") {
@@ -57,6 +59,11 @@ fun AppNavGraph(
         }
         composable("appLauncher") {
             AppLauncherScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        composable("manageStudentAttendance") {
+            ManageStudentAttendanceScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }

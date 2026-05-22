@@ -20,3 +20,4 @@ lastdata.txt
 rfid.txt
 tokens.csv
 # /android
+android/app/release/app-release.apk
