@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,7 +21,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -52,11 +55,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.ehazir.companion.R
 import com.ehazir.companion.service.RfidSocketService
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,12 +80,14 @@ fun DashboardScreen(
     val connectionStatus by RfidSocketService.connectionStatus.collectAsState()
     val lastScannedRfid by RfidSocketService.lastScannedRfid.collectAsState()
     val latestRfidHttpRunning by RfidSocketService.isLatestRfidHttpRunning.collectAsState()
+    val lastAdmsRequest by RfidSocketService.lastAdmsRequest.collectAsState()
     val context = LocalContext.current
     val homeSettingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { }
     val homeLauncherIntent = remember { createHomeLauncherRequestIntent(context) }
     var actionsExpanded by remember { mutableStateOf(false) }
+    var showStudentAttendanceDetails by remember { mutableStateOf(false) }
 
     BackHandler {
         // Dashboard is the app's home surface; ignore Back here.
@@ -87,7 +96,8 @@ fun DashboardScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Dashboard") },
+                modifier = Modifier.height(120.dp),
+                title = { EhazirLogo() },
                 actions = {
                     Box(modifier = Modifier.padding(end = 8.dp)) {
                         OutlinedButton(onClick = { actionsExpanded = true }) {
@@ -156,11 +166,6 @@ fun DashboardScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                "Attendance Summary",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-            )
             val attendanceSummaryError = state.attendanceSummaryError
             when {
                 state.isAttendanceSummaryLoading -> Text(
@@ -176,26 +181,110 @@ fun DashboardScreen(
             }
 
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                val sections = listOf(
-                    "Students" to state.studentCounts,
-                    "Teachers" to state.teacherCounts,
-                    "Staffs" to state.staffCounts
-                )
                 val isTablet = maxWidth >= 720.dp
-                if (maxWidth >= 720.dp) {
+                if (isTablet && showStudentAttendanceDetails) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SummarySection(
+                            title = "Students",
+                            counts = state.studentCounts,
+                            isTablet = isTablet,
+                            modifier = Modifier.fillMaxWidth(),
+                            showDetailButton = state.gradeAttendance.isNotEmpty(),
+                            showDetails = showStudentAttendanceDetails,
+                            onToggleDetails = {
+                                showStudentAttendanceDetails = !showStudentAttendanceDetails
+                            },
+                            detailContent = {
+                                GradeAttendanceTable(
+                                    totalCounts = state.gradeAttendance.aggregateCounts(),
+                                    gradeAttendance = state.gradeAttendance
+                                )
+                            }
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            SummarySection(
+                                title = "Teachers",
+                                counts = state.teacherCounts,
+                                isTablet = isTablet,
+                                modifier = Modifier.weight(1f)
+                            )
+                            SummarySection(
+                                title = "Staffs",
+                                counts = state.staffCounts,
+                                isTablet = isTablet,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                } else if (isTablet) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        sections.forEach { (title, counts) ->
-                            SummarySection(title = title, counts = counts, isTablet = isTablet, modifier = Modifier.weight(1f))
-                        }
+                        SummarySection(
+                            title = "Students",
+                            counts = state.studentCounts,
+                            isTablet = isTablet,
+                            modifier = Modifier.weight(1f),
+                            showDetailButton = state.gradeAttendance.isNotEmpty(),
+                            showDetails = showStudentAttendanceDetails,
+                            onToggleDetails = {
+                                showStudentAttendanceDetails = !showStudentAttendanceDetails
+                            },
+                            detailContent = {
+                                GradeAttendanceTable(
+                                    totalCounts = state.gradeAttendance.aggregateCounts(),
+                                    gradeAttendance = state.gradeAttendance
+                                )
+                            }
+                        )
+                        SummarySection(
+                            title = "Teachers",
+                            counts = state.teacherCounts,
+                            isTablet = isTablet,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SummarySection(
+                            title = "Staffs",
+                            counts = state.staffCounts,
+                            isTablet = isTablet,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        sections.forEach { (title, counts) ->
-                            SummarySection(title = title, counts = counts, isTablet = isTablet, modifier = Modifier.fillMaxWidth())
-                        }
+                        SummarySection(
+                            title = "Students",
+                            counts = state.studentCounts,
+                            isTablet = isTablet,
+                            modifier = Modifier.fillMaxWidth(),
+                            showDetailButton = state.gradeAttendance.isNotEmpty(),
+                            showDetails = showStudentAttendanceDetails,
+                            onToggleDetails = {
+                                showStudentAttendanceDetails = !showStudentAttendanceDetails
+                            },
+                            detailContent = {
+                                GradeAttendanceTable(
+                                    totalCounts = state.gradeAttendance.aggregateCounts(),
+                                    gradeAttendance = state.gradeAttendance
+                                )
+                            }
+                        )
+                        SummarySection(
+                            title = "Teachers",
+                            counts = state.teacherCounts,
+                            isTablet = isTablet,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        SummarySection(
+                            title = "Staffs",
+                            counts = state.staffCounts,
+                            isTablet = isTablet,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
@@ -205,6 +294,7 @@ fun DashboardScreen(
                 connectionStatus = connectionStatus,
                 lastScannedRfid = lastScannedRfid,
                 latestRfidHttpRunning = latestRfidHttpRunning,
+                lastAdmsRequest = lastAdmsRequest,
                 onToggleSocketService = {
                     if (socketRunning) viewModel.stopSocketService() else viewModel.startSocketService()
                 },
@@ -213,8 +303,23 @@ fun DashboardScreen(
                     else viewModel.startLatestRfidHttpServer()
                 }
             )
+            Spacer(
+                modifier = Modifier
+                    .height(12.dp)
+                    .navigationBarsPadding()
+            )
         }
     }
+}
+
+@Composable
+private fun EhazirLogo() {
+    Image(
+        painter = painterResource(id = R.drawable.ehazir_logo),
+        contentDescription = "eHazir",
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.size(width = 340.dp, height = 108.dp)
+    )
 }
 
 private fun createHomeLauncherRequestIntent(context: Context): Intent {
@@ -262,11 +367,156 @@ private fun openHomeLauncherRequest(
 }
 
 @Composable
+private fun GradeAttendanceTable(
+    totalCounts: AttendanceSummaryCounts,
+    gradeAttendance: List<GradeAttendanceSummary>
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium
+            )
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        GradeAttendanceTableHeader()
+        GradeAttendanceTotalRow(totalCounts)
+        gradeAttendance.forEachIndexed { index, summary ->
+            GradeAttendanceTableRow(
+                summary = summary,
+                isAlternate = index % 2 == 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun GradeAttendanceTableHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.primary,
+                shape = MaterialTheme.shapes.small
+            )
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        TableText("Grade", Modifier.weight(1.4f), isHeader = true)
+        TableText("Sec", Modifier.weight(0.8f), isHeader = true)
+        TableText("P", Modifier.weight(0.7f), isHeader = true, textAlign = TextAlign.End)
+        TableText("A", Modifier.weight(0.7f), isHeader = true, textAlign = TextAlign.End)
+        TableText("H", Modifier.weight(0.7f), isHeader = true, textAlign = TextAlign.End)
+        TableText("L", Modifier.weight(0.7f), isHeader = true, textAlign = TextAlign.End)
+        TableText("Total", Modifier.weight(0.9f), isHeader = true, textAlign = TextAlign.End)
+    }
+}
+
+@Composable
+private fun GradeAttendanceTotalRow(
+    counts: AttendanceSummaryCounts
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.primaryContainer,
+                shape = MaterialTheme.shapes.small
+            )
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        TableText("Total", Modifier.weight(1.4f), isEmphasis = true)
+        TableText("-", Modifier.weight(0.8f), isEmphasis = true)
+        TableText(counts.present.toString(), Modifier.weight(0.7f), isEmphasis = true, textAlign = TextAlign.End)
+        TableText(counts.absent.toString(), Modifier.weight(0.7f), isEmphasis = true, textAlign = TextAlign.End)
+        TableText(counts.half.toString(), Modifier.weight(0.7f), isEmphasis = true, textAlign = TextAlign.End)
+        TableText(counts.leave.toString(), Modifier.weight(0.7f), isEmphasis = true, textAlign = TextAlign.End)
+        TableText(counts.total.toString(), Modifier.weight(0.9f), isEmphasis = true, textAlign = TextAlign.End)
+    }
+}
+
+@Composable
+private fun GradeAttendanceTableRow(
+    summary: GradeAttendanceSummary,
+    isAlternate: Boolean
+) {
+    val counts = summary.counts
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (isAlternate) {
+                    MaterialTheme.colorScheme.surface
+                } else {
+                    MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+                },
+                shape = MaterialTheme.shapes.small
+            )
+            .padding(horizontal = 10.dp, vertical = 9.dp)
+    ) {
+        TableText(summary.gradeName, Modifier.weight(1.4f))
+        TableText(summary.sectionName.ifBlank { "-" }, Modifier.weight(0.8f))
+        TableText(counts.present.toString(), Modifier.weight(0.7f), textAlign = TextAlign.End)
+        TableText(counts.absent.toString(), Modifier.weight(0.7f), textAlign = TextAlign.End)
+        TableText(counts.half.toString(), Modifier.weight(0.7f), textAlign = TextAlign.End)
+        TableText(counts.leave.toString(), Modifier.weight(0.7f), textAlign = TextAlign.End)
+        TableText(counts.total.toString(), Modifier.weight(0.9f), textAlign = TextAlign.End)
+    }
+}
+
+@Composable
+private fun TableText(
+    text: String,
+    modifier: Modifier = Modifier,
+    isHeader: Boolean = false,
+    isEmphasis: Boolean = false,
+    textAlign: TextAlign = TextAlign.Start
+) {
+    Text(
+        text = text,
+        modifier = modifier,
+        style = MaterialTheme.typography.bodyMedium,
+        fontSize = 15.sp,
+        fontWeight = when {
+            isHeader || isEmphasis -> FontWeight.SemiBold
+            else -> FontWeight.Normal
+        },
+        color = when {
+            isHeader -> MaterialTheme.colorScheme.onPrimary
+            isEmphasis -> MaterialTheme.colorScheme.onPrimaryContainer
+            else -> MaterialTheme.colorScheme.onSurface
+        },
+        textAlign = textAlign
+    )
+}
+
+private val AttendanceSummaryCounts.total: Int
+    get() = present + absent + half + leave
+
+private fun List<GradeAttendanceSummary>.aggregateCounts(): AttendanceSummaryCounts =
+    fold(AttendanceSummaryCounts()) { total, summary ->
+        AttendanceSummaryCounts(
+            present = total.present + summary.counts.present,
+            absent = total.absent + summary.counts.absent,
+            half = total.half + summary.counts.half,
+            leave = total.leave + summary.counts.leave
+        )
+    }
+
+@Composable
 private fun RfidPanel(
     socketRunning: Boolean,
     connectionStatus: Map<String, Boolean>,
     lastScannedRfid: String?,
     latestRfidHttpRunning: Boolean,
+    lastAdmsRequest: String?,
     onToggleSocketService: () -> Unit,
     onToggleWebServer: () -> Unit
 ) {
@@ -293,7 +543,7 @@ private fun RfidPanel(
                         Text(if (socketRunning) "Stop Reader" else "Start Reader", fontSize = 12.sp)
                     }
                     TextButton(onClick = onToggleWebServer) {
-                        Text(if (latestRfidHttpRunning) "Stop Web" else "Start Web", fontSize = 12.sp)
+                        Text(if (latestRfidHttpRunning) "Stop ADMS" else "Start ADMS", fontSize = 12.sp)
                     }
                 }
             }
@@ -307,8 +557,13 @@ private fun RfidPanel(
             Text("$connected/${connectionStatus.size} reader(s) connected")
             Text("Latest RFID: ${lastScannedRfid ?: "None"}")
             Text(
-                text = if (latestRfidHttpRunning) "HTTP server: port 9000 running" else "HTTP server: stopped",
+                text = if (latestRfidHttpRunning) "ADMS server: port 9000 running" else "ADMS server: stopped",
                 color = if (latestRfidHttpRunning) Color(0xFF008A6A) else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "Last ADMS: ${lastAdmsRequest ?: "None"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -319,18 +574,33 @@ private fun SummarySection(
     title: String,
     counts: AttendanceSummaryCounts,
     isTablet: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showDetailButton: Boolean = false,
+    showDetails: Boolean = false,
+    onToggleDetails: () -> Unit = {},
+    detailContent: @Composable () -> Unit = {}
 ) {
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text(
-                title,
-                style = if (isTablet) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    title,
+                    style = if (isTablet) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (showDetailButton) {
+                    TextButton(onClick = onToggleDetails) {
+                        Text(if (showDetails) "Hide detail" else "Show detail")
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 StatusCard("Present", counts.present.toString(), Color(0xFF1F7A3D), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
@@ -340,6 +610,10 @@ private fun SummarySection(
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 StatusCard("Half", counts.half.toString(), Color(0xFFB26A00), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
                 StatusCard("Leave", counts.leave.toString(), Color(0xFFE56B1F), Color(0xFFFFFFFF), isTablet, Modifier.weight(1f))
+            }
+            if (showDetails) {
+                Spacer(modifier = Modifier.height(12.dp))
+                detailContent()
             }
         }
     }

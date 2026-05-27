@@ -152,7 +152,7 @@ class SettingsViewModel @Inject constructor(
             _state.update {
                 it.copy(
                     isLatestRfidHttpEnabled = true,
-                    message = "Latest RFID HTTP server enabled on port ${RfidSocketService.LATEST_RFID_HTTP_PORT}"
+                    message = "HTTP ADMS server enabled on port ${RfidSocketService.LATEST_RFID_HTTP_PORT}"
                 )
             }
             val intent = Intent(appContext, RfidSocketService::class.java).apply {
@@ -172,7 +172,7 @@ class SettingsViewModel @Inject constructor(
             _state.update {
                 it.copy(
                     isLatestRfidHttpEnabled = false,
-                    message = "Latest RFID HTTP server disabled"
+                    message = "HTTP ADMS server disabled"
                 )
             }
             if (RfidSocketService.isRunning.value) {

@@ -17,6 +17,9 @@ import com.ehazir.companion.R
 import com.ehazir.companion.data.local.AttendanceDao
 import com.ehazir.companion.data.local.AttendanceEntity
 import com.ehazir.companion.data.preferences.AppPreferences
+import com.ehazir.companion.data.remote.EhazirApiService
+import com.ehazir.companion.data.remote.StaffAttendanceRecord
+import com.ehazir.companion.data.remote.StaffAttendanceRequest
 import com.ehazir.companion.data.repository.AttendanceRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
@@ -49,6 +52,8 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         private const val CHANNEL_ID = "rfid_service_channel"
         private const val NOTIFICATION_ID = 1001
         private const val FLUSH_INTERVAL_MS = 1000L
+        private const val ADMS_BATCH_INTERVAL_MS = 60000L
+        private const val ADMS_DEFAULT_BUFFER_MINUTES = 30L
         const val LATEST_RFID_HTTP_PORT = 9000
         const val ACTION_START_LATEST_RFID_HTTP =
             "com.ehazir.companion.action.START_LATEST_RFID_HTTP"
@@ -70,17 +75,22 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
 
         private val _latestRfidHttpError = MutableStateFlow<String?>(null)
         val latestRfidHttpError: StateFlow<String?> = _latestRfidHttpError.asStateFlow()
+
+        private val _lastAdmsRequest = MutableStateFlow<String?>(null)
+        val lastAdmsRequest: StateFlow<String?> = _lastAdmsRequest.asStateFlow()
     }
 
     @Inject lateinit var dao: AttendanceDao
     @Inject lateinit var prefs: AppPreferences
     @Inject lateinit var repository: AttendanceRepository
+    @Inject lateinit var apiService: EhazirApiService
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val socketClients = mutableListOf<RfidSocketClient>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var latestRfidHttpJob: Job? = null
     private var latestRfidHttpServerSocket: ServerSocket? = null
+    private var admsFlushJob: Job? = null
 
     // In-memory attendance cache keyed by RFID (same pattern as main.js)
     private data class CachedRecord(
@@ -93,6 +103,21 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
 
     private val attendanceCache = ConcurrentHashMap<String, CachedRecord>()
     private var deviceUpdateTime = 30 // seconds
+
+    private data class AdmsCachedRecord(
+        val record: StaffAttendanceRecord,
+        val timestamp: Long,
+        var sent: Boolean
+    )
+
+    private data class HttpRequest(
+        val method: String,
+        val path: String,
+        val body: String
+    )
+
+    private val admsAttendanceCache = ConcurrentHashMap<String, AdmsCachedRecord>()
+    private var admsBufferTimeMs = ADMS_DEFAULT_BUFFER_MINUTES * 60 * 1000
 
     private val flushRunnable = object : Runnable {
         override fun run() {
@@ -118,6 +143,7 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
                 
                 val deviceUpdateTimeStr = prefs.deviceUpdateTime.first()
                 deviceUpdateTime = deviceUpdateTimeStr.toIntOrNull() ?: 30
+                admsBufferTimeMs = (deviceUpdateTimeStr.toLongOrNull() ?: ADMS_DEFAULT_BUFFER_MINUTES) * 60 * 1000
                 val latestRfidHttpEnabled = prefs.isLatestRfidHttpEnabled.first()
                 if (latestRfidHttpEnabled) {
                     startLatestRfidHttpServer()
@@ -178,7 +204,11 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
                 latestRfidHttpServerSocket = serverSocket
                 _latestRfidHttpError.value = null
                 _isLatestRfidHttpRunning.value = true
-                Log.d(TAG, "Latest RFID HTTP server listening on port $LATEST_RFID_HTTP_PORT")
+                startAdmsFlushLoop()
+                Log.d(
+                    TAG,
+                    "HTTP server listening on port $LATEST_RFID_HTTP_PORT; ADMS buffer=${admsBufferTimeMs}ms"
+                )
 
                 while (isActive && !serverSocket.isClosed) {
                     val client = try {
@@ -198,6 +228,8 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
                     _latestRfidHttpError.value = message
                 }
             } finally {
+                admsFlushJob?.cancel()
+                admsFlushJob = null
                 runCatching { latestRfidHttpServerSocket?.close() }
                 latestRfidHttpServerSocket = null
                 _isLatestRfidHttpRunning.value = false
@@ -209,31 +241,36 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
     private fun stopLatestRfidHttpServer() {
         latestRfidHttpJob?.cancel()
         latestRfidHttpJob = null
+        admsFlushJob?.cancel()
+        admsFlushJob = null
         runCatching { latestRfidHttpServerSocket?.close() }
         latestRfidHttpServerSocket = null
         _isLatestRfidHttpRunning.value = false
         _latestRfidHttpError.value = null
-        Log.d(TAG, "Latest RFID HTTP server stopped")
+        Log.d(TAG, "HTTP server stopped")
     }
 
     private fun handleLatestRfidHttpClient(client: Socket) {
         client.use { socket ->
             socket.soTimeout = 2000
 
-            var requestLine: String? = null
-            runCatching {
-                val reader = socket.getInputStream().bufferedReader()
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    if (requestLine == null) requestLine = line
-                    if (line.isEmpty()) break
-                }
+            val request = readHttpRequest(socket)
+            val remoteAddress = socket.inetAddress?.hostAddress.orEmpty()
+            if (request != null) {
+                val preview = request.body.take(500).replace("\n", "\\n")
+                val message = "${request.method} ${request.path} from $remoteAddress body=\"$preview\""
+                _lastAdmsRequest.value = message
+                Log.d(TAG, "ADMS request: $message")
+            } else {
+                val message = "Invalid HTTP request from $remoteAddress"
+                _lastAdmsRequest.value = message
+                Log.w(TAG, message)
             }
 
             val output = socket.getOutputStream()
-            if (requestLine?.startsWith("OPTIONS ", ignoreCase = true) == true) {
+            if (request?.method?.equals("OPTIONS", ignoreCase = true) == true) {
                 val response = "HTTP/1.1 204 No Content\r\n" +
-                    latestRfidCorsHeaders() +
+                    commonCorsHeaders() +
                     "Connection: close\r\n" +
                     "Content-Length: 0\r\n\r\n"
                 output.write(response.toByteArray(Charsets.UTF_8))
@@ -241,10 +278,23 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
                 return
             }
 
+            if (request?.path == "/iclock/getrequest" || request?.path == "/iclock/registry") {
+                writeTextResponse(output, "OK")
+                return
+            }
+
+            if (request?.path == "/iclock/cdata") {
+                val records = parseAdmsAttendance(request.body)
+                records.forEach(::cacheAdmsAttendance)
+                Log.d(TAG, "Received ${records.size} ADMS attendance record(s)")
+                writeTextResponse(output, "OK")
+                return
+            }
+
             val latestRfid = _lastScannedRfid.value?.takeIf { it.isNotBlank() }
             val body = latestRfidJsonBody(latestRfid).toByteArray(Charsets.UTF_8)
             val headers = "HTTP/1.1 200 OK\r\n" +
-                latestRfidCorsHeaders() +
+                commonCorsHeaders() +
                 "Content-Type: application/json; charset=utf-8\r\n" +
                 "Content-Length: ${body.size}\r\n" +
                 "Connection: close\r\n\r\n"
@@ -252,6 +302,58 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
             output.write(body)
             output.flush()
         }
+    }
+
+    private fun readHttpRequest(socket: Socket): HttpRequest? {
+        return runCatching {
+            val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)
+            val requestLine = reader.readLine() ?: return@runCatching null
+            val requestParts = requestLine.split(" ")
+            val method = requestParts.getOrNull(0).orEmpty()
+            val path = requestParts.getOrNull(1).orEmpty().substringBefore("?")
+
+            var contentLength = 0
+            while (true) {
+                val line = reader.readLine() ?: break
+                if (line.isEmpty()) break
+                val separator = line.indexOf(':')
+                if (separator <= 0) continue
+                val name = line.substring(0, separator).trim()
+                if (name.equals("Content-Length", ignoreCase = true)) {
+                    contentLength = line.substring(separator + 1).trim().toIntOrNull() ?: 0
+                }
+            }
+
+            val body = if (contentLength > 0) {
+                val chars = CharArray(contentLength)
+                var totalRead = 0
+                while (totalRead < contentLength) {
+                    val read = reader.read(chars, totalRead, contentLength - totalRead)
+                    if (read == -1) break
+                    totalRead += read
+                }
+                String(chars, 0, totalRead)
+            } else {
+                ""
+            }
+
+            HttpRequest(method = method, path = path, body = body)
+        }.getOrElse { e ->
+            Log.e(TAG, "HTTP request parse error: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun writeTextResponse(output: java.io.OutputStream, text: String) {
+        val body = text.toByteArray(Charsets.UTF_8)
+        val headers = "HTTP/1.1 200 OK\r\n" +
+            commonCorsHeaders() +
+            "Content-Type: text/plain; charset=utf-8\r\n" +
+            "Content-Length: ${body.size}\r\n" +
+            "Connection: close\r\n\r\n"
+        output.write(headers.toByteArray(Charsets.UTF_8))
+        output.write(body)
+        output.flush()
     }
 
     private fun latestRfidJsonBody(rfid: String?): String {
@@ -263,11 +365,100 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         }
     }
 
-    private fun latestRfidCorsHeaders(): String =
+    private fun commonCorsHeaders(): String =
         "Access-Control-Allow-Origin: *\r\n" +
-            "Access-Control-Allow-Methods: GET, OPTIONS\r\n" +
+            "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
             "Access-Control-Allow-Headers: *\r\n" +
             "Access-Control-Max-Age: 86400\r\n"
+
+    private fun parseAdmsAttendance(raw: String): List<StaffAttendanceRecord> {
+        if (raw.isBlank()) return emptyList()
+
+        return raw
+            .trim()
+            .lineSequence()
+            .filter { it.isNotBlank() }
+            .mapNotNull { line ->
+                val cols = line.split("\t")
+                val userId = cols.getOrNull(0)?.trim().orEmpty()
+                val punchTime = cols.getOrNull(1)?.trim().orEmpty()
+                if (userId.isBlank() || punchTime.isBlank()) {
+                    null
+                } else {
+                    StaffAttendanceRecord(
+                        userId = userId,
+                        punchTime = punchTime,
+                        inOutMode = cols.getOrNull(2)?.trim()?.takeIf { it.isNotBlank() },
+                        verifyMode = cols.getOrNull(3)?.trim()?.takeIf { it.isNotBlank() }
+                    )
+                }
+            }
+            .toList()
+    }
+
+    private fun cacheAdmsAttendance(record: StaffAttendanceRecord) {
+        val now = System.currentTimeMillis()
+        val cached = admsAttendanceCache[record.userId]
+
+        if (cached != null && now - cached.timestamp < admsBufferTimeMs) {
+            Log.d(
+                TAG,
+                "Duplicate ADMS attendance ignored for user ${record.userId} within ${(now - cached.timestamp) / 1000}s"
+            )
+            return
+        }
+
+        admsAttendanceCache[record.userId] = AdmsCachedRecord(
+            record = record,
+            timestamp = now,
+            sent = false
+        )
+        Log.d(TAG, "Cached ADMS attendance for user ${record.userId}")
+    }
+
+    @Synchronized
+    private fun startAdmsFlushLoop() {
+        if (admsFlushJob?.isActive == true) return
+
+        admsFlushJob = serviceScope.launch {
+            while (isActive) {
+                delay(ADMS_BATCH_INTERVAL_MS)
+                flushAdmsAttendanceCache()
+            }
+        }
+    }
+
+    private suspend fun flushAdmsAttendanceCache() {
+        val now = System.currentTimeMillis()
+        val unsent = admsAttendanceCache.values
+            .filter { !it.sent }
+            .map { it.record }
+
+        if (unsent.isNotEmpty()) {
+            Log.d(TAG, "Sending ${unsent.size} ADMS attendance record(s)")
+            try {
+                val response = apiService.submitStaffAttendance(
+                    StaffAttendanceRequest(records = unsent)
+                )
+                if (response.isSuccessful) {
+                    admsAttendanceCache.values.forEach { cached ->
+                        if (!cached.sent) cached.sent = true
+                    }
+                } else {
+                    Log.e(
+                        TAG,
+                        "ADMS backend error: ${response.errorBody()?.string() ?: response.code().toString()}"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "ADMS backend error: ${e.message}", e)
+            }
+        }
+
+        admsAttendanceCache.entries.removeIf { entry ->
+            now - entry.value.timestamp >= admsBufferTimeMs
+        }
+    }
 
     /**
      * Load today's attendance records into the in-memory cache
@@ -433,6 +624,7 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         // Final flush
         runBlocking {
             flushCache()
+            flushAdmsAttendanceCache()
         }
 
         serviceScope.cancel()

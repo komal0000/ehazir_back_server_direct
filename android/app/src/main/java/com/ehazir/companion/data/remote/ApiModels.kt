@@ -91,5 +91,38 @@ data class TodayAttendanceResponse(
 data class TodayAttendanceData(
     @SerializedName("student") val student: Map<String, Int> = emptyMap(),
     @SerializedName("staff") val staff: Map<String, Int> = emptyMap(),
-    @SerializedName("teacher") val teacher: Map<String, Int> = emptyMap()
+    @SerializedName("teacher") val teacher: Map<String, Int> = emptyMap(),
+    @SerializedName("grades") val grades: List<TodayAttendanceGradeDto> = emptyList()
+)
+
+data class TodayAttendanceGradeDto(
+    @SerializedName("grade_id") val gradeId: Int,
+    @SerializedName("grade_name") val gradeName: String,
+    @SerializedName("sections") val sections: List<TodayAttendanceSectionDto> = emptyList()
+)
+
+data class TodayAttendanceSectionDto(
+    @SerializedName("section_id") val sectionId: Int = 0,
+    @SerializedName("section_name") val sectionName: String = "",
+    @SerializedName("1") val status1: Int = 0,
+    @SerializedName("2") val status2: Int = 0,
+    @SerializedName("3") val status3: Int = 0,
+    @SerializedName("4") val status4: Int = 0
+)
+
+// --- ZKTeco ADMS staff attendance ---
+data class StaffAttendanceRecord(
+    @SerializedName("userId") val userId: String,
+    @SerializedName("punchTime") val punchTime: String,
+    @SerializedName("inOutMode") val inOutMode: String? = null,
+    @SerializedName("verifyMode") val verifyMode: String? = null
+)
+
+data class StaffAttendanceRequest(
+    @SerializedName("records") val records: List<StaffAttendanceRecord>
+)
+
+data class StaffAttendanceResponse(
+    @SerializedName("message") val message: String? = null,
+    @SerializedName("status") val status: String? = null
 )

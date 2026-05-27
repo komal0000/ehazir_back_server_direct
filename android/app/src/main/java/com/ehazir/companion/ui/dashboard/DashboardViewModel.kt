@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ehazir.companion.data.preferences.AppPreferences
 import com.ehazir.companion.data.remote.EhazirApiService
+import com.ehazir.companion.data.remote.TodayAttendanceGradeDto
 import com.ehazir.companion.data.remote.TodayAttendanceRequest
 import com.ehazir.companion.service.RfidSocketService
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -34,8 +35,17 @@ data class DashboardState(
     val studentCounts: AttendanceSummaryCounts = AttendanceSummaryCounts(),
     val teacherCounts: AttendanceSummaryCounts = AttendanceSummaryCounts(),
     val staffCounts: AttendanceSummaryCounts = AttendanceSummaryCounts(),
+    val gradeAttendance: List<GradeAttendanceSummary> = emptyList(),
     val isAttendanceSummaryLoading: Boolean = false,
     val attendanceSummaryError: String? = null
+)
+
+data class GradeAttendanceSummary(
+    val gradeId: Int,
+    val gradeName: String,
+    val sectionId: Int,
+    val sectionName: String,
+    val counts: AttendanceSummaryCounts
 )
 
 @HiltViewModel
@@ -85,11 +95,14 @@ class DashboardViewModel @Inject constructor(
                 val body = response.body()
                 val data = body?.data
                 if (response.isSuccessful && body?.status == true && data != null) {
+                    val studentCounts = data.student.toAttendanceSummaryCounts()
+                    val gradeAttendance = data.grades.toGradeAttendanceSummaries(studentCounts)
                     _state.update {
                         it.copy(
-                            studentCounts = data.student.toAttendanceSummaryCounts(),
+                            studentCounts = studentCounts,
                             teacherCounts = data.teacher.toAttendanceSummaryCounts(),
                             staffCounts = data.staff.toAttendanceSummaryCounts(),
+                            gradeAttendance = gradeAttendance,
                             isAttendanceSummaryLoading = false,
                             attendanceSummaryError = null
                         )
@@ -160,3 +173,51 @@ private fun Map<String, Int>.toAttendanceSummaryCounts(): AttendanceSummaryCount
         half = this["3"] ?: 0,
         leave = this["4"] ?: 0
     )
+
+private fun List<TodayAttendanceGradeDto>.toGradeAttendanceSummaries(
+    studentCounts: AttendanceSummaryCounts
+): List<GradeAttendanceSummary> {
+    val summaries = flatMap { grade ->
+        grade.sections.map { section ->
+            GradeAttendanceSummary(
+                gradeId = grade.gradeId,
+                gradeName = grade.gradeName,
+                sectionId = section.sectionId,
+                sectionName = section.sectionName,
+                counts = AttendanceSummaryCounts(
+                    present = section.status1,
+                    absent = section.status2,
+                    half = section.status3,
+                    leave = section.status4
+                )
+            )
+        }
+    }
+    val totals = summaries.sumCounts()
+    val shouldSwapPresentAbsent =
+        totals.present == studentCounts.absent &&
+            totals.present != studentCounts.present
+
+    return if (shouldSwapPresentAbsent) {
+        summaries.map { summary ->
+            summary.copy(
+                counts = summary.counts.copy(
+                    present = summary.counts.absent,
+                    absent = summary.counts.present
+                )
+            )
+        }
+    } else {
+        summaries
+    }
+}
+
+private fun List<GradeAttendanceSummary>.sumCounts(): AttendanceSummaryCounts =
+    fold(AttendanceSummaryCounts()) { total, summary ->
+        AttendanceSummaryCounts(
+            present = total.present + summary.counts.present,
+            absent = total.absent + summary.counts.absent,
+            half = total.half + summary.counts.half,
+            leave = total.leave + summary.counts.leave
+        )
+    }

@@ -26,6 +26,11 @@ interface EhazirApiService {
     suspend fun getTodayAttendanceData(
         @Body request: TodayAttendanceRequest
     ): Response<TodayAttendanceResponse>
+
+    @POST("api/staff/attendance")
+    suspend fun submitStaffAttendance(
+        @Body request: StaffAttendanceRequest
+    ): Response<StaffAttendanceResponse>
 }
 
 interface ValidationApiService {

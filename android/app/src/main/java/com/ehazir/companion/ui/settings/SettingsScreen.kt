@@ -211,7 +211,7 @@ fun SettingsScreen(
             // ─────────────────────────────────────────────────────────────────
 
             HorizontalDivider()
-            Text("Latest RFID HTTP Server", style = MaterialTheme.typography.titleMedium)
+            Text("HTTP ADMS Server", style = MaterialTheme.typography.titleMedium)
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -235,7 +235,7 @@ fun SettingsScreen(
                         }
                     )
                     Text(
-                        text = "http://<device-ip>:${RfidSocketService.LATEST_RFID_HTTP_PORT}/",
+                        text = "http://<device-ip>:${RfidSocketService.LATEST_RFID_HTTP_PORT}/iclock/cdata",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
