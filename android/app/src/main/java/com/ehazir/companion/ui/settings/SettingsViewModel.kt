@@ -9,6 +9,7 @@ import com.ehazir.companion.data.preferences.AppPreferences
 import com.ehazir.companion.data.preferences.ConfigManager
 import com.ehazir.companion.data.preferences.DeviceConfig
 import com.ehazir.companion.data.preferences.DomainUtils
+import com.ehazir.companion.data.preferences.RfidReaderConfig
 import com.ehazir.companion.service.RfidSocketService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -24,8 +25,7 @@ import javax.inject.Inject
 data class SettingsState(
     val deviceId: String = "",
     val localToken: String = "",
-    val serverHost: String = "192.168.254.21",
-    val serverPort: String = "2022",
+    val rfidReaders: List<RfidReaderConfig> = listOf(RfidReaderConfig()),
     val mainDomain: String = "",
     val mainProtocol: String = "https",
     val deviceUpdateTime: String = "30",
@@ -56,8 +56,8 @@ class SettingsViewModel @Inject constructor(
                 it.copy(
                     deviceId         = config.deviceId,
                     localToken       = config.localToken,
-                    serverHost       = config.serverHost.ifBlank { "192.168." },
-                    serverPort       = config.serverPort,
+                    rfidReaders      = config.configuredReaders()
+                        .ifEmpty { listOf(RfidReaderConfig()) },
                     mainDomain       = DomainUtils.toTenant(config.mainDomain),
                     mainProtocol     = config.mainProtocol,
                     deviceUpdateTime = config.deviceUpdateTime
@@ -70,8 +70,8 @@ class SettingsViewModel @Inject constructor(
                     it.copy(
                         deviceId         = saved.deviceId,
                         localToken       = saved.localToken,
-                        serverHost       = saved.serverHost.ifBlank { "192.168." },
-                        serverPort       = saved.serverPort,
+                        rfidReaders      = saved.configuredReaders()
+                            .ifEmpty { listOf(RfidReaderConfig()) },
                         mainDomain       = DomainUtils.toTenant(saved.mainDomain),
                         mainProtocol     = saved.mainProtocol,
                         deviceUpdateTime = saved.deviceUpdateTime
@@ -86,6 +86,21 @@ class SettingsViewModel @Inject constructor(
 
     fun clearMessage() = _state.update { it.copy(message = null) }
 
+    fun addRfidReader() = _state.update {
+        it.copy(rfidReaders = it.rfidReaders + RfidReaderConfig())
+    }
+
+    fun removeRfidReader(index: Int) = _state.update {
+        if (it.rfidReaders.size <= 1) it
+        else it.copy(rfidReaders = it.rfidReaders.filterIndexed { i, _ -> i != index })
+    }
+
+    fun updateRfidReader(index: Int, reader: RfidReaderConfig) = _state.update {
+        it.copy(rfidReaders = it.rfidReaders.mapIndexed { i, current ->
+            if (i == index) reader else current
+        })
+    }
+
     private fun observeLatestRfidHttpEnabled() {
         viewModelScope.launch {
             prefs.isLatestRfidHttpEnabled.collect { enabled ->
@@ -97,6 +112,17 @@ class SettingsViewModel @Inject constructor(
     fun saveSettings() {
         viewModelScope.launch(Dispatchers.IO) {
             val s = _state.value
+            val readers = s.rfidReaders.map {
+                it.copy(host = it.host.trim(), port = it.port.trim())
+            }
+            if (readers.any { it.host.isBlank() || it.port.toIntOrNull() !in 1..65535 }) {
+                _state.update { it.copy(message = "Each RFID reader needs a host and a valid port") }
+                return@launch
+            }
+            if (readers.distinctBy { "${it.host.lowercase()}:${it.port}" }.size != readers.size) {
+                _state.update { it.copy(message = "Duplicate RFID reader host and port") }
+                return@launch
+            }
             val normalizedDomain = DomainUtils.normalizeTenantDomain(s.mainDomain)
             if (!DomainUtils.validateDomainExists(normalizedDomain)) {
                 _state.update { it.copy(message = "Domain does not exist: $normalizedDomain") }
@@ -106,8 +132,9 @@ class SettingsViewModel @Inject constructor(
             val config = DeviceConfig(
                 localToken       = s.localToken,
                 deviceId         = s.deviceId,
-                serverHost       = s.serverHost.trim().ifBlank { "192.168." },
-                serverPort       = s.serverPort,
+                serverHost       = readers.first().host,
+                serverPort       = readers.first().port,
+                rfidReaders      = readers,
                 mainDomain       = normalizedDomain,
                 mainProtocol     = s.mainProtocol,
                 deviceUpdateTime = s.deviceUpdateTime

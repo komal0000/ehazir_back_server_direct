@@ -23,6 +23,7 @@ class RfidSocketClient(
     private val serverPort: Int,
     private val listener: RfidDataListener
 ) : Thread("RfidSocket-$serverHost") {
+    private val endpoint = "$serverHost:$serverPort"
 
     companion object {
         private const val TAG = "RfidSocketClient"
@@ -115,14 +116,14 @@ class RfidSocketClient(
                 val currentTime = timeFormat.format(now)
 
                 Log.d(TAG, "RFID from $serverHost: $rfid")
-                listener.onRfidReceived(rfid, currentDate, currentTime, serverHost)
+                listener.onRfidReceived(rfid, currentDate, currentTime, endpoint)
             }
         }
     }
 
     private fun notifyConnectionStatus(connected: Boolean) {
         mainHandler.post {
-            listener.onConnectionStatusChanged(connected, serverHost)
+            listener.onConnectionStatusChanged(connected, endpoint)
         }
     }
 

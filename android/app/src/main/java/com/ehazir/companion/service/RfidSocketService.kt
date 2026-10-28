@@ -78,6 +78,20 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
 
         private val _lastAdmsRequest = MutableStateFlow<String?>(null)
         val lastAdmsRequest: StateFlow<String?> = _lastAdmsRequest.asStateFlow()
+
+        data class AdmsLogEntry(
+            val receivedAt: String,
+            val method: String,
+            val path: String,
+            val remoteAddress: String,
+            val bodyPreview: String,
+            val parsedRecords: List<StaffAttendanceRecord>
+        )
+
+        private const val ADMS_LOG_LIMIT = 20
+        private val admsLogLock = Any()
+        private val _admsLog = MutableStateFlow<List<AdmsLogEntry>>(emptyList())
+        val admsLog: StateFlow<List<AdmsLogEntry>> = _admsLog.asStateFlow()
     }
 
     @Inject lateinit var dao: AttendanceDao
@@ -94,6 +108,7 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
 
     // In-memory attendance cache keyed by RFID (same pattern as main.js)
     private data class CachedRecord(
+        val rfid: String,
         val date: String,
         val intime: String,
         var outtime: String,
@@ -137,9 +152,7 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         serviceScope.launch {
             try {
                 // Read config
-                val serverHost = prefs.serverHost.first()
-                val serverPortStr = prefs.serverPort.first()
-                val serverPort = serverPortStr.toIntOrNull() ?: 2022
+                val readers = prefs.rfidReaders.first()
                 
                 val deviceUpdateTimeStr = prefs.deviceUpdateTime.first()
                 deviceUpdateTime = deviceUpdateTimeStr.toIntOrNull() ?: 30
@@ -149,9 +162,7 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
                     startLatestRfidHttpServer()
                 }
                 
-                val hosts = serverHost.split(",").map { it.trim() }.filter { it.isNotBlank() }
-
-                if (hosts.isEmpty()) {
+                if (readers.isEmpty()) {
                     Log.e(TAG, "No server hosts configured")
                     if (latestRfidHttpEnabled) {
                         updateNotification("Latest RFID HTTP active; no reader configured")
@@ -167,19 +178,25 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
 
                 // Start socket clients for each host
                 val statusMap = mutableMapOf<String, Boolean>()
-                for (host in hosts) {
-                    Log.d(TAG, "Starting socket client for $host:$serverPort")
-                    val client = RfidSocketClient(host, serverPort, this@RfidSocketService)
+                for (reader in readers) {
+                    val port = reader.port.toIntOrNull()
+                    if (reader.host.isBlank() || port == null || port !in 1..65535) {
+                        Log.e(TAG, "Skipping invalid RFID reader: ${reader.host}:${reader.port}")
+                        continue
+                    }
+                    val endpoint = "${reader.host}:$port"
+                    Log.d(TAG, "Starting socket client for $endpoint")
+                    val client = RfidSocketClient(reader.host, port, this@RfidSocketService)
                     client.start()
                     socketClients.add(client)
-                    statusMap[host] = false
+                    statusMap[endpoint] = false
                 }
                 _connectionStatus.value = statusMap
 
                 // Start periodic cache flush (every 1 second)
                 mainHandler.postDelayed(flushRunnable, FLUSH_INTERVAL_MS)
 
-                updateNotification("Connecting to ${hosts.size} reader(s)...")
+                updateNotification("Connecting to ${statusMap.size} reader(s)...")
 
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting service: ${e.message}")
@@ -269,6 +286,7 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
 
             val output = socket.getOutputStream()
             if (request?.method?.equals("OPTIONS", ignoreCase = true) == true) {
+                appendAdmsLog(request, remoteAddress, emptyList())
                 val response = "HTTP/1.1 204 No Content\r\n" +
                     commonCorsHeaders() +
                     "Connection: close\r\n" +
@@ -279,16 +297,22 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
             }
 
             if (request?.path == "/iclock/getrequest" || request?.path == "/iclock/registry") {
+                appendAdmsLog(request, remoteAddress, emptyList())
                 writeTextResponse(output, "OK")
                 return
             }
 
             if (request?.path == "/iclock/cdata") {
                 val records = parseAdmsAttendance(request.body)
+                appendAdmsLog(request, remoteAddress, records)
                 records.forEach(::cacheAdmsAttendance)
                 Log.d(TAG, "Received ${records.size} ADMS attendance record(s)")
                 writeTextResponse(output, "OK")
                 return
+            }
+
+            if (request != null) {
+                appendAdmsLog(request, remoteAddress, emptyList())
             }
 
             val latestRfid = _lastScannedRfid.value?.takeIf { it.isNotBlank() }
@@ -301,6 +325,24 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
             output.write(headers.toByteArray(Charsets.UTF_8))
             output.write(body)
             output.flush()
+        }
+    }
+
+    private fun appendAdmsLog(
+        request: HttpRequest,
+        remoteAddress: String,
+        parsedRecords: List<StaffAttendanceRecord>
+    ) {
+        val entry = AdmsLogEntry(
+            receivedAt = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date()),
+            method = request.method,
+            path = request.path,
+            remoteAddress = remoteAddress,
+            bodyPreview = request.body.take(1000),
+            parsedRecords = parsedRecords
+        )
+        synchronized(admsLogLock) {
+            _admsLog.value = (listOf(entry) + _admsLog.value).take(ADMS_LOG_LIMIT)
         }
     }
 
@@ -468,7 +510,9 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
         val records = dao.getTodayRecords(today).first()
         for (record in records) {
-            attendanceCache[record.rfid] = CachedRecord(
+            val cacheKey = "${record.rfid}|${record.date}"
+            attendanceCache[cacheKey] = CachedRecord(
+                rfid = record.rfid,
                 date = record.date,
                 intime = record.checkIn,
                 outtime = record.checkOut,
@@ -484,29 +528,37 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
     override fun onRfidReceived(rfid: String, date: String, time: String, host: String) {
         _lastScannedRfid.value = rfid
 
-        val existing = attendanceCache[rfid]
+        val cacheKey = "$rfid|$date"
+        val existing = attendanceCache[cacheKey]
 
         if (existing != null) {
-            // Check if the date changed (new day)
-            if (existing.date != date) {
-                attendanceCache.clear()
-                // Fall through to create new record
-            } else {
-                // Check if enough time has passed to update outtime
-                val timeDiffSeconds = computeTimeDiffSeconds(
-                    "${existing.date} ${existing.outtime}",
-                    "$date $time"
-                )
-                if (timeDiffSeconds > deviceUpdateTime) {
+            // Check if enough time has passed to update outtime
+            val timeDiffSeconds = computeTimeDiffSeconds(
+                "${existing.date} ${existing.outtime}",
+                "$date $time"
+            )
+            if (timeDiffSeconds > deviceUpdateTime) {
+                synchronized(existing) {
                     existing.outtime = time
                     existing.updated = true
                 }
-                return
+            }
+            return
+        }
+
+        // It is a new record for this (rfid, date)
+        // Find and force-flush any older cached records for this rfid (RFID date transition)
+        val prefix = "$rfid|"
+        val oldKeys = attendanceCache.keys().asSequence().filter { it.startsWith(prefix) && it != cacheKey }.toList()
+        if (oldKeys.isNotEmpty()) {
+            serviceScope.launch {
+                forceFlushAndRemove(oldKeys)
             }
         }
 
-        // New RFID for today
-        attendanceCache[rfid] = CachedRecord(
+        // Create new cache record
+        attendanceCache[cacheKey] = CachedRecord(
+            rfid = rfid,
             date = date,
             intime = time,
             outtime = time,
@@ -525,6 +577,63 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
         updateNotification("$connectedCount/$total reader(s) connected")
     }
 
+    private suspend fun flushSingleRecord(record: CachedRecord): Boolean {
+        val isNewToFlush: Boolean
+        val isUpdatedToFlush: Boolean
+        synchronized(record) {
+            isNewToFlush = record.isNew
+            isUpdatedToFlush = record.updated
+            if (isNewToFlush) {
+                record.isNew = false
+            }
+            if (isUpdatedToFlush) {
+                record.updated = false
+            }
+        }
+
+        var flushed = false
+        if (isNewToFlush) {
+            dao.insertIgnore(
+                AttendanceEntity(
+                    rfid = record.rfid,
+                    date = record.date,
+                    checkIn = record.intime,
+                    checkOut = record.outtime,
+                    isSynced = 0
+                )
+            )
+            flushed = true
+        } else if (isUpdatedToFlush) {
+            val existing = dao.findByDateAndRfid(record.date, record.rfid)
+            if (existing != null) {
+                dao.updateCheckOut(existing.id, record.outtime)
+            }
+            flushed = true
+        }
+        return flushed
+    }
+
+    private suspend fun forceFlushAndRemove(keys: List<String>) {
+        var flushedAny = false
+        for (key in keys) {
+            val record = attendanceCache[key]
+            if (record != null) {
+                if (flushSingleRecord(record)) {
+                    flushedAny = true
+                }
+                attendanceCache.remove(key)
+            }
+        }
+        if (flushedAny) {
+            Log.d(TAG, "Force-flushed and removed old records for keys: $keys")
+            try {
+                repository.syncPendingRecords()
+            } catch (e: Exception) {
+                Log.e(TAG, "Sync error: ${e.message}")
+            }
+        }
+    }
+
     // --- Cache flush (mirrors main.js flushCache) ---
 
     private suspend fun flushCache() {
@@ -532,26 +641,8 @@ class RfidSocketService : LifecycleService(), RfidSocketClient.RfidDataListener 
 
         var flushedCount = 0
 
-        for ((rfid, record) in attendanceCache) {
-            if (record.isNew) {
-                dao.insertIgnore(
-                    AttendanceEntity(
-                        rfid = rfid,
-                        date = record.date,
-                        checkIn = record.intime,
-                        checkOut = record.outtime,
-                        isSynced = 0
-                    )
-                )
-                record.isNew = false
-                record.updated = false
-                flushedCount++
-            } else if (record.updated) {
-                val existing = dao.findByDateAndRfid(record.date, rfid)
-                if (existing != null) {
-                    dao.updateCheckOut(existing.id, record.outtime)
-                }
-                record.updated = false
+        for ((_, record) in attendanceCache) {
+            if (flushSingleRecord(record)) {
                 flushedCount++
             }
         }

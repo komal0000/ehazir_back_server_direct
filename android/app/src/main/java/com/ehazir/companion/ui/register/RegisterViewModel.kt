@@ -6,6 +6,7 @@ import com.ehazir.companion.data.preferences.AppPreferences
 import com.ehazir.companion.data.preferences.ConfigManager
 import com.ehazir.companion.data.preferences.DeviceConfig
 import com.ehazir.companion.data.preferences.DomainUtils
+import com.ehazir.companion.data.preferences.RfidReaderConfig
 import com.ehazir.companion.data.remote.EhazirApiService
 import com.ehazir.companion.data.remote.RegisterRequest
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -30,8 +31,7 @@ data class RegisterState(
     // Step 2 - Config fields
     val localToken: String = "",       // user pastes received Telegram token here
     val deviceId: String = "",         // auto-generated, shown read-only
-    val serverHost: String = "192.168.", // IP of the RFID reader device
-    val serverPort: String = "2022",
+    val rfidReaders: List<RfidReaderConfig> = listOf(RfidReaderConfig()),
     val mainDomain: String = "",       // e.g. demo.ehazircloud.com
     val mainProtocol: String = "https",
     val deviceUpdateTime: String = "30",
@@ -59,8 +59,8 @@ class RegisterViewModel @Inject constructor(
         _state.update {
             it.copy(
                 deviceId         = autoDeviceId,
-                serverHost       = existing?.serverHost?.ifBlank { "192.168." } ?: "192.168.",
-                serverPort       = existing?.serverPort ?: "2022",
+                rfidReaders      = existing?.configuredReaders().orEmpty()
+                    .ifEmpty { listOf(RfidReaderConfig()) },
                 mainDomain       = DomainUtils.toTenant(existing?.mainDomain ?: ""),
                 mainProtocol     = existing?.mainProtocol ?: "https",
                 deviceUpdateTime = existing?.deviceUpdateTime ?: "30"
@@ -101,8 +101,20 @@ class RegisterViewModel @Inject constructor(
     }
 
     fun updateLocalToken(v: String)       = _state.update { it.copy(localToken = v) }
-    fun updateServerHost(v: String)       = _state.update { it.copy(serverHost = v) }
-    fun updateServerPort(v: String)       = _state.update { it.copy(serverPort = v) }
+    fun addRfidReader() = _state.update {
+        it.copy(rfidReaders = it.rfidReaders + RfidReaderConfig())
+    }
+
+    fun removeRfidReader(index: Int) = _state.update {
+        if (it.rfidReaders.size <= 1) it
+        else it.copy(rfidReaders = it.rfidReaders.filterIndexed { i, _ -> i != index })
+    }
+
+    fun updateRfidReader(index: Int, reader: RfidReaderConfig) = _state.update {
+        it.copy(rfidReaders = it.rfidReaders.mapIndexed { i, current ->
+            if (i == index) reader else current
+        })
+    }
     fun updateMainDomain(v: String)       = _state.update { it.copy(mainDomain = v) }
     fun updateMainProtocol(v: String)     = _state.update { it.copy(mainProtocol = v) }
     fun updateDeviceUpdateTime(v: String) = _state.update { it.copy(deviceUpdateTime = v) }
@@ -114,6 +126,17 @@ class RegisterViewModel @Inject constructor(
         val s = _state.value
         if (s.localToken.isBlank() || s.mainDomain.isBlank()) {
             _state.update { it.copy(error = "Token and Server Domain are required") }
+            return
+        }
+        val readers = s.rfidReaders.map {
+            it.copy(host = it.host.trim(), port = it.port.trim())
+        }
+        if (readers.any { it.host.isBlank() || it.port.toIntOrNull() !in 1..65535 }) {
+            _state.update { it.copy(error = "Each RFID reader needs a host and a valid port") }
+            return
+        }
+        if (readers.distinctBy { "${it.host.lowercase()}:${it.port}" }.size != readers.size) {
+            _state.update { it.copy(error = "Duplicate RFID reader host and port") }
             return
         }
         _state.update { it.copy(isSubmitting = true, error = null) }
@@ -133,8 +156,9 @@ class RegisterViewModel @Inject constructor(
             val config = DeviceConfig(
                 localToken       = s.localToken.trim(),
                 deviceId         = s.deviceId,
-                serverHost       = s.serverHost.trim().ifBlank { "192.168." },
-                serverPort       = s.serverPort.trim(),
+                serverHost       = readers.first().host,
+                serverPort       = readers.first().port,
+                rfidReaders      = readers,
                 mainDomain       = normalizedDomain,
                 mainProtocol     = s.mainProtocol.trim(),
                 deviceUpdateTime = s.deviceUpdateTime.trim()

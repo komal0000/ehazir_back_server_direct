@@ -7,6 +7,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -15,15 +17,33 @@ import javax.inject.Singleton
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "ehazir_prefs")
 
+data class RfidReaderConfig(
+    val host: String = "192.168.",
+    val port: String = "2022"
+)
+
 data class DeviceConfig(
     val localToken: String = "",
     val deviceId: String = "",
     val serverHost: String = "192.168.",
     val serverPort: String = "2022",
+    val rfidReaders: List<RfidReaderConfig>? = null,
     val mainDomain: String = "",
     val mainProtocol: String = "https",
     val deviceUpdateTime: String = "30"
-)
+) {
+    fun configuredReaders(): List<RfidReaderConfig> {
+        val readers = rfidReaders.orEmpty()
+            .map { it.copy(host = it.host.trim(), port = it.port.trim()) }
+            .filter { it.host.isNotBlank() }
+        if (readers.isNotEmpty()) return readers
+
+        return serverHost.split(",")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .map { RfidReaderConfig(host = it, port = serverPort.ifBlank { "2022" }) }
+    }
+}
 
 @Singleton
 class AppPreferences @Inject constructor(
@@ -34,6 +54,7 @@ class AppPreferences @Inject constructor(
         val DEVICE_ID         = stringPreferencesKey("device_id")
         val SERVER_HOST       = stringPreferencesKey("server_host")
         val SERVER_PORT       = stringPreferencesKey("server_port")
+        val RFID_READERS      = stringPreferencesKey("rfid_readers")
         val MAIN_DOMAIN       = stringPreferencesKey("main_domain")
         val MAIN_PROTOCOL     = stringPreferencesKey("main_protocol")
         val DEVICE_UPDATE_TIME = stringPreferencesKey("device_update_time")
@@ -46,6 +67,15 @@ class AppPreferences @Inject constructor(
     val deviceId: Flow<String>          = context.dataStore.data.map { it[DEVICE_ID]         ?: "" }
     val serverHost: Flow<String>        = context.dataStore.data.map { it[SERVER_HOST]       ?: "192.168." }
     val serverPort: Flow<String>        = context.dataStore.data.map { it[SERVER_PORT]       ?: "2022" }
+    val rfidReaders: Flow<List<RfidReaderConfig>> = context.dataStore.data.map {
+        parseReaders(it[RFID_READERS]).ifEmpty {
+            val port = it[SERVER_PORT] ?: "2022"
+            (it[SERVER_HOST] ?: "192.168.").split(",")
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .map { host -> RfidReaderConfig(host, port) }
+        }
+    }
     val mainDomain: Flow<String>        = context.dataStore.data.map { it[MAIN_DOMAIN]       ?: "" }
     val mainProtocol: Flow<String>      = context.dataStore.data.map { it[MAIN_PROTOCOL]     ?: "https" }
     val deviceUpdateTime: Flow<String>  = context.dataStore.data.map { it[DEVICE_UPDATE_TIME]?: "30" }
@@ -74,11 +104,14 @@ class AppPreferences @Inject constructor(
     }
 
     suspend fun saveFullConfig(config: DeviceConfig) {
+        val readers = config.configuredReaders()
+        val firstReader = readers.firstOrNull() ?: RfidReaderConfig()
         context.dataStore.edit { prefs ->
             prefs[LOCAL_TOKEN]        = config.localToken
             prefs[DEVICE_ID]          = config.deviceId
-            prefs[SERVER_HOST]        = config.serverHost
-            prefs[SERVER_PORT]        = config.serverPort
+            prefs[SERVER_HOST]        = firstReader.host
+            prefs[SERVER_PORT]        = firstReader.port
+            prefs[RFID_READERS]       = Gson().toJson(readers)
             prefs[MAIN_DOMAIN]        = config.mainDomain
             prefs[MAIN_PROTOCOL]      = config.mainProtocol
             prefs[DEVICE_UPDATE_TIME] = config.deviceUpdateTime
@@ -93,6 +126,7 @@ class AppPreferences @Inject constructor(
             deviceId         = prefs[DEVICE_ID]          ?: "",
             serverHost       = prefs[SERVER_HOST]        ?: "192.168.",
             serverPort       = prefs[SERVER_PORT]        ?: "2022",
+            rfidReaders      = parseReaders(prefs[RFID_READERS]),
             mainDomain       = prefs[MAIN_DOMAIN]        ?: "",
             mainProtocol     = prefs[MAIN_PROTOCOL]      ?: "https",
             deviceUpdateTime = prefs[DEVICE_UPDATE_TIME] ?: "30"
@@ -105,5 +139,13 @@ class AppPreferences @Inject constructor(
             prefs[DEVICE_ID]      = ""
             prefs[IS_REGISTERED]  = "false"
         }
+    }
+
+    private fun parseReaders(json: String?): List<RfidReaderConfig> {
+        if (json.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val type = object : TypeToken<List<RfidReaderConfig>>() {}.type
+            Gson().fromJson<List<RfidReaderConfig>>(json, type).orEmpty()
+        }.getOrDefault(emptyList())
     }
 }

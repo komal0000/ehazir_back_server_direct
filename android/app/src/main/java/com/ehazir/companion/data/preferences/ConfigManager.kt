@@ -1,7 +1,6 @@
 package com.ehazir.companion.data.preferences
 
 import android.content.Context
-import com.ehazir.companion.data.preferences.DeviceConfig
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -25,7 +24,17 @@ class ConfigManager @Inject constructor(
         get() = File(context.filesDir, "device_config.json")
 
     fun save(config: DeviceConfig) {
-        configFile.writeText(gson.toJson(config))
+        val readers = config.configuredReaders()
+        val firstReader = readers.firstOrNull() ?: RfidReaderConfig()
+        configFile.writeText(
+            gson.toJson(
+                config.copy(
+                    serverHost = firstReader.host,
+                    serverPort = firstReader.port,
+                    rfidReaders = readers
+                )
+            )
+        )
     }
 
     fun load(): DeviceConfig? {

@@ -105,22 +105,55 @@ fun SettingsScreen(
             )
 
             HorizontalDivider()
-            Text("RFID Reader Device", style = MaterialTheme.typography.titleMedium)
+            Text("RFID Reader Devices", style = MaterialTheme.typography.titleMedium)
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = state.serverHost,
-                    onValueChange = { viewModel.update { s -> s.copy(serverHost = it) } },
-                    label = { Text("SERVER_HOST") },
-                    placeholder = { Text("192.168.") },
-                    modifier = Modifier.weight(3f)
-                )
-                OutlinedTextField(
-                    value = state.serverPort,
-                    onValueChange = { viewModel.update { s -> s.copy(serverPort = it) } },
-                    label = { Text("PORT") },
-                    modifier = Modifier.weight(1.5f)
-                )
+            state.rfidReaders.forEachIndexed { index, reader ->
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "Reader ${index + 1}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        if (state.rfidReaders.size > 1) {
+                            TextButton(onClick = { viewModel.removeRfidReader(index) }) {
+                                Text("Remove")
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = reader.host,
+                            onValueChange = {
+                                viewModel.updateRfidReader(index, reader.copy(host = it))
+                            },
+                            label = { Text("Host / IP") },
+                            placeholder = { Text("192.168.1.20") },
+                            modifier = Modifier.weight(3f),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = reader.port,
+                            onValueChange = {
+                                viewModel.updateRfidReader(index, reader.copy(port = it))
+                            },
+                            label = { Text("Port") },
+                            modifier = Modifier.weight(1.5f),
+                            singleLine = true
+                        )
+                    }
+                }
+            }
+
+            OutlinedButton(
+                onClick = { viewModel.addRfidReader() },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Add RFID Reader")
             }
 
             OutlinedTextField(

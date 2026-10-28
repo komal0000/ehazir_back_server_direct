@@ -58,6 +58,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -81,6 +82,7 @@ fun DashboardScreen(
     val lastScannedRfid by RfidSocketService.lastScannedRfid.collectAsState()
     val latestRfidHttpRunning by RfidSocketService.isLatestRfidHttpRunning.collectAsState()
     val lastAdmsRequest by RfidSocketService.lastAdmsRequest.collectAsState()
+    val admsLog by RfidSocketService.admsLog.collectAsState()
     val context = LocalContext.current
     val homeSettingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -303,6 +305,7 @@ fun DashboardScreen(
                     else viewModel.startLatestRfidHttpServer()
                 }
             )
+            AdmsLogPanel(admsLog = admsLog)
             Spacer(
                 modifier = Modifier
                     .height(12.dp)
@@ -508,7 +511,109 @@ private fun List<GradeAttendanceSummary>.aggregateCounts(): AttendanceSummaryCou
             half = total.half + summary.counts.half,
             leave = total.leave + summary.counts.leave
         )
+}
+
+@Composable
+private fun AdmsLogPanel(
+    admsLog: List<RfidSocketService.AdmsLogEntry>
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                "ADMS Log",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "Recent data received from the biometric device",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            HorizontalDivider()
+
+            if (admsLog.isEmpty()) {
+                Text(
+                    "No ADMS requests received yet",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                admsLog.forEach { entry ->
+                    AdmsLogEntryRow(entry = entry)
+                }
+            }
+        }
     }
+}
+
+@Composable
+private fun AdmsLogEntryRow(
+    entry: RfidSocketService.AdmsLogEntry
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.small
+            )
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "${entry.receivedAt}  ${entry.method} ${entry.path}",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                entry.remoteAddress,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Text(
+            "Parsed records: ${entry.parsedRecords.size}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        entry.parsedRecords.forEach { record ->
+            Text(
+                "userId=${record.userId}, punchTime=${record.punchTime}, inOutMode=${record.inOutMode ?: "-"}, verifyMode=${record.verifyMode ?: "-"}",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+
+        if (entry.bodyPreview.isNotBlank()) {
+            Text(
+                "Raw: ${entry.bodyPreview}",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Text(
+                "Raw: empty body",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
 
 @Composable
 private fun RfidPanel(
